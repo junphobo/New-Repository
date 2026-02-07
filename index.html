@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,height=device-height,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+<title>뽀송이의 모험 : 고촌</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#000;touch-action:none;-webkit-user-select:none;user-select:none;font-family:system-ui,-apple-system,"Noto Sans KR",sans-serif}
+  canvas{position:fixed;inset:0;width:100vw;height:100svh;display:block}
+  #hud{
+    position:fixed;left:10px;top:10px;right:10px;z-index:50;
+    background:rgba(255,255,255,.92); border-radius:14px;
+    padding:10px 12px; max-height:26svh; overflow:auto;
+    backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+    border:1px solid rgba(0,0,0,.12);
+  }
+  #hud b{display:block;font-size:14px;margin-bottom:6px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .pill{padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.95);border:1px solid rgba(0,0,0,.12);white-space:nowrap;font-size:12px}
+  .ok{color:#0a7a3a;font-weight:900}
+  .bar{width:180px;height:10px;border-radius:999px;overflow:hidden;background:rgba(0,0,0,.12);border:1px solid rgba(0,0,0,.12)}
+  .bar>i{display:block;height:100%;width:100%;background:linear-gradient(90deg,#ff5b6a,#ffb14a)}
+  .btns{margin-top:8px;display:flex;gap:8px;flex-wrap:wrap}
+  button{padding:6px 10px;border-radius:10px;border:1px solid rgba(0,0,0,.15);background:rgba(255,255,255,.96);font:800 12px/1 system-ui,-apple-system,"Noto Sans KR"}
+  #touch{
+    position:fixed;left:0;right:0;bottom:0;z-index:9999;
+    padding:14px 14px calc(18px + env(safe-area-inset-bottom,0px));
+    display:flex;justify-content:space-between;align-items:flex-end;pointer-events:none
+  }
+  .pad{display:flex;gap:12px;pointer-events:auto}
+  .btn{
+    width:74px;height:74px;border-radius:18px;background:rgba(255,255,255,.88);
+    border:1px solid rgba(0,0,0,.14);box-shadow:0 10px 24px rgba(0,0,0,.22);
+    display:flex;align-items:center;justify-content:center;font:900 22px/1 system-ui,-apple-system
+  }
+  .btn:active{transform:translateY(1px)}
+  .btn.jump{width:98px;height:98px;font-size:18px}
+</style>
+</head>
+<body>
+
+<div id="hud">
+<button id="hudToggle">HUD 접기</button>
+  <b>뽀송이의 모험 : 고촌</b>
+  <div class="row">
+    <span class="pill">스테이지: <span id="stg">1</span></span>
+    <span class="pill">점수: <span id="score">0</span></span>
+    <span class="pill">코인: <span id="coin">0</span>/<span id="need">7</span></span>
+    <span class="pill">몬스터: <span id="killed">0</span></span>
+    <span class="pill ok">행복 모드 ✨</span>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <span class="pill">HP: <span id="hearts"></span> (<span id="hp">10</span>/<span id="hpMax">10</span>)</span>
+    <span class="bar"><i id="hpBar"></i></span>
+    <span class="pill">포탈: <span id="portalTxt">잠김 🔒</span></span>
+  </div>
+  <div class="btns">
+    <button id="reset">리셋</button>
+    <button id="endingBtn">엔딩 보기</button>
+    <button id="platBtn">발판 보기</button>
+  </div>
+</div>
+
+<div id="touch">
+  <div class="pad">
+    <div class="btn" id="left">←</div>
+    <div class="btn" id="right">→</div>
+  </div>
+  <div class="pad">
+    <div class="btn jump" id="jump">점프</div>
+  </div>
+</div>
+
+<canvas id="c"></canvas>
+
+<script>
+(() => {
+let DPR = 1;
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d", {alpha:false});
+
+  const VW = () => document.documentElement.clientWidth;
+  const VH = () => document.documentElement.clientHeight;
+
+  function resize(){
+    DPR = Math.max(1, Math.min(3, window.devicePixelRatio||1));
+    canvas.width = Math.floor(VW()*DPR);
+    canvas.height = Math.floor(VH()*DPR);
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+  }
+  addEventListener("resize", resize);
+  resize();
+
+  // ===== HUD refs =====
+  const $stg = document.getElementById("stg");
+  const $score = document.getElementById("score");
+  const $coin = document.getElementById("coin");
+  const $need = document.getElementById("need");
+  const $killed = document.getElementById("killed");
+  const $hearts = document.getElementById("hearts");
+  const $hp = document.getElementById("hp");
+  const $hpMax = document.getElementById("hpMax");
+  const $hpBar = document.getElementById("hpBar");
+  const $portalTxt = document.getElementById("portalTxt");
+
+  // ===== Virtual game size (고정 월드) =====
+  const W = 960, H = 540;
+
+  // 꽉 채우기(아이폰 여백 최소)
+  function beginView(){
+    const s = Math.min(VW()/W, VH()/H);
+    const ox = (VW()-W*s)/2;
+    const oy = (VH()-H*s)/2;
+
+    ctx.save();
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    ctx.fillStyle="#000";
+    ctx.fillRect(0,0,VW(),VH());
+
+    ctx.translate(ox,oy);
+    ctx.scale(s,s);
+  }
+  function endView(){ ctx.restore(); }
+
+  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+  const aabb = (ax,ay,aw,ah,bx,by,bw,bh)=> ax<bx+bw && ax+aw>bx && ay<by+bh && ay+ah>by;
+
+  // ===== Assets =====
+  const IMG = {};
+  const load = (name, src) => new Promise(res=>{
+    const im = new Image();
+    im.onload = ()=>{ IMG[name]=im; res(true); };
+    im.onerror = ()=>{ IMG[name]=null; res(false); };
+    im.src = src + "?v=" + Date.now();
+  });
+
+  // stage backgrounds
+  const STAGES = [
+    { bg:"bg.jpg",  need:7 },
+    { bg:"bg2.jpg", need:8 },
+    { bg:"bg3.jpg", need:9 },
+  ];
+
+  // ===== Input =====
+  const keys = {};
+  addEventListener("keydown",(e)=>{
+    if(["Space","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.code)) e.preventDefault();
+    keys[e.code]=true;
+  },{passive:false});
+  addEventListener("keyup",(e)=> keys[e.code]=false);
+
+  document.addEventListener("touchmove",(e)=>e.preventDefault(),{passive:false});
+
+  function bindHold(el, code){
+    const down = (e)=>{ e.preventDefault(); keys[code]=true; };
+    const up = (e)=>{ e.preventDefault(); keys[code]=false; };
+    el.addEventListener("pointerdown", down);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+    el.addEventListener("pointerleave", up);
+  }
+  bindHold(document.getElementById("left"), "ArrowLeft");
+  bindHold(document.getElementById("right"), "ArrowRight");
+  bindHold(document.getElementById("jump"), "Space");
+
+  // ===== Game state =====
+  const state = {
+    mode:"play", // play | ending
+    stage:0,
+    score:0,
+    hpMax:10,
+    hp:10,
+    need:7,
+    showPlat:false,
+    coins:[],
+    killed:0,
+    portalOn:false
+  };
+
+  const p = { x:90, y:200, w:56, h:56, vx:0, vy:0, on:false, face:1 };
+
+  const gravity = 1700;
+  const accel = 2400;
+  const maxSpeed = 340;
+  const friction = 1800;
+  const jumpV = 820;
+
+  // 발판(배경 느낌 맞춰 배치) — 초록 막대 튀는 거 줄이려고 "잔디색 + 반투명"로 그림
+  let platforms = [];
+  const portal = { x:880, y:250, r:44 };
+
+  function seeded(seed){
+    let t = seed>>>0;
+    return ()=>{ t+=0x6D2B79F5; let x=t; x=Math.imul(x^(x>>>15),x|1); x^=x+Math.imul(x^(x>>>7),x|61); return ((x^(x>>>14))>>>0)/4294967296; };
+  }
+
+  function buildStage(si){
+    state.stage = si;
+    state.need = STAGES[si].need;
+    state.portalOn = false;
+    state.coins = [];
+    p.x=90; p.y=200; p.vx=0; p.vy=0; p.on=false; p.face=1;
+
+    // stage별로 약간씩 다른 발판 배치
+    if(si===0){
+      platforms = [
+        {x:0,y:420,w:960,h:120},
+        {x:120,y:330,w:210,h:22},
+        {x:380,y:350,w:220,h:22},
+        {x:680,y:300,w:220,h:22},
+        {x:320,y:275,w:160,h:18},
+        {x:540,y:285,w:170,h:18},
+      ];
+      portal.x=885; portal.y=250;
+    } else if(si===1){
+      platforms = [
+        {x:0,y:430,w:960,h:110},
+        {x:140,y:340,w:190,h:22},
+        {x:380,y:305,w:190,h:22},
+        {x:630,y:270,w:200,h:22},
+        {x:470,y:235,w:140,h:18},
+        {x:250,y:260,w:140,h:18},
+      ];
+      portal.x=880; portal.y=210;
+    } else {
+      platforms = [
+        {x:0,y:440,w:960,h:100},
+        {x:110,y:330,w:180,h:22},
+        {x:320,y:290,w:180,h:22},
+        {x:540,y:260,w:180,h:22},
+        {x:740,y:220,w:180,h:22},
+        {x:420,y:215,w:140,h:18},
+      ];
+      portal.x=885; portal.y=180;
+    }
+
+    // 코인: "갈 수 있는 발판 위"에만 배치
+    const rnd = seeded(20260207 + si*999);
+    const want = state.need + 4; // 여분
+    const coins = [];
+
+    let guard=0;
+    while(coins.length < want && guard++ < 1200){
+      const pl = platforms[1 + Math.floor(rnd()*(platforms.length-1))];
+      const x = pl.x + 30 + rnd() * Math.max(1, pl.w - 60);
+      const y = pl.y - 18;
+      let ok=true;
+      for(const c of coins){
+        const dx=c.x-x, dy=c.y-y;
+        if(dx*dx+dy*dy < 34*34){ ok=false; break; }
+      }
+      if(ok) coins.push({x,y,taken:false});
+    }
+    state.coins = coins;
+
+    // 배경 로드
+    load("bg", STAGES[si].bg);
+    // 캐릭터/엔딩도 한번만 로드
+    if(!IMG.posongi) load("posongi", "posongi.png");
+    if(!IMG.ending) load("ending", "ending.png");
+
+    updateHUD();
+  }
+
+  function updateHUD(){
+    $stg.textContent = String(state.stage+1);
+    $score.textContent = String(state.score);
+    const got = state.coins.filter(c=>c.taken).length;
+    $coin.textContent = String(got);
+    $need.textContent = String(state.need);
+    $killed.textContent = String(state.killed);
+
+    $hp.textContent = String(state.hp);
+    $hpMax.textContent = String(state.hpMax);
+    $hearts.textContent = "❤".repeat(state.hp);
+    $hpBar.style.width = (state.hp/state.hpMax*100)+"%";
+
+    $portalTxt.textContent = state.portalOn ? "활성 ✅" : "잠김 🔒";
+    $portalTxt.className = state.portalOn ? "pill ok" : "pill";
+  }
+
+  function resetAll(){
+    state.mode="play";
+    state.score=0;
+    state.killed=0;
+    state.hp=state.hpMax;
+    buildStage(0);
+  }
+
+  document.getElementById("reset").onclick = resetAll;
+  document.getElementById("endingBtn").onclick = ()=> state.mode="ending";
+  document.getElementById("platBtn").onclick = ()=> state.showPlat = !state.showPlat;
+const hud = document.getElementById("hud");
+const hudToggle = document.getElementById("hudToggle");
+let hudHidden = false;
+hudToggle.onclick = () => {
+  hudHidden = !hudHidden;
+  hud.style.display = hudHidden ? "none" : "block";
+  hudToggle.textContent = hudHidden ? "HUD 펼치기" : "HUD 접기";
+};
+  function resolvePlatforms(prevX, prevY){
+    p.on=false;
+    for(const pl of platforms){
+      if(!aabb(p.x,p.y,p.w,p.h, pl.x,pl.y,pl.w,pl.h)) continue;
+
+      const prevBottom = prevY + p.h;
+      const currBottom = p.y + p.h;
+
+      if(prevBottom <= pl.y + 10 && currBottom >= pl.y && p.vy >= 0){
+        p.y = pl.y - p.h;
+        p.vy = 0;
+        p.on = true;
+        continue;
+      }
+
+      const prevRight = prevX + p.w;
+      const prevLeft = prevX;
+      if(prevRight <= pl.x + 4) p.x = pl.x - p.w;
+      else if(prevLeft >= pl.x + pl.w - 4) p.x = pl.x + pl.w;
+    }
+  }
+
+  function drawCoin(c){
+    ctx.save();
+    ctx.translate(c.x,c.y);
+    ctx.beginPath();
+    ctx.arc(0,0,10,0,Math.PI*2);
+    ctx.fillStyle="#ffd35a";
+    ctx.fill();
+    ctx.lineWidth=3;
+    ctx.strokeStyle="#d9a62b";
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawPortal(){
+    const t = performance.now()/1000;
+    const active = state.portalOn;
+    const pulse = 1 + (active ? 0.10*Math.sin(t*6) : 0.0);
+
+    ctx.save();
+    ctx.translate(portal.x, portal.y);
+    ctx.scale(pulse,pulse);
+    ctx.beginPath();
+    ctx.arc(0,0,portal.r,0,Math.PI*2);
+    ctx.fillStyle = active ? "rgba(80,255,170,0.22)" : "rgba(200,200,200,0.12)";
+    ctx.fill();
+    ctx.lineWidth=10;
+    ctx.strokeStyle = active ? "rgba(90,255,150,0.95)" : "rgba(180,180,180,0.55)";
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawPlayer(){
+    const img = IMG.posongi;
+    if(!img){
+      ctx.fillStyle="#fff"; ctx.fillRect(p.x,p.y,p.w,p.h);
+      return;
+    }
+    ctx.save();
+    if(p.face === -1){
+      ctx.translate(p.x+p.w, p.y);
+      ctx.scale(-1,1);
+      ctx.drawImage(img, 0,0, p.w,p.h);
+    }else{
+      ctx.drawImage(img, p.x,p.y, p.w,p.h);
+    }
+    ctx.restore();
+  }
+
+  function drawPlatformsDebug(){
+    ctx.save();
+    ctx.globalAlpha = 0.22;
+    for(const pl of platforms){
+      ctx.fillStyle = "#2fd64f";
+      ctx.fillRect(pl.x, pl.y, pl.w, pl.h);
+    }
+    ctx.restore();
+  }
+
+  function inPortal(){
+    const pr = portal.r;
+    return aabb(p.x,p.y,p.w,p.h, portal.x-pr, portal.y-pr, pr*2, pr*2);
+  }
+
+  function nextStageOrEnding(){
+    if(state.stage < STAGES.length-1){
+      buildStage(state.stage+1);
+    }else{
+      state.mode = "ending";
+    }
+  }
+
+  function loop(){
+    const dt = 1/60;
+
+    if(state.mode === "play"){
+      const left = keys["ArrowLeft"] || keys["KeyA"];
+      const right = keys["ArrowRight"] || keys["KeyD"];
+      const jump = keys["Space"];
+
+      if(left && !right) p.face = -1;
+      if(right && !left) p.face = 1;
+
+      if(left && !right) p.vx -= accel*dt;
+      else if(right && !left) p.vx += accel*dt;
+      else{
+        if(p.vx>0) p.vx = Math.max(0, p.vx - friction*dt);
+        if(p.vx<0) p.vx = Math.min(0, p.vx + friction*dt);
+      }
+      p.vx = clamp(p.vx, -maxSpeed, maxSpeed);
+
+      if(jump && p.on){
+        p.vy = -jumpV;
+        p.on = false;
+      }
+
+      const prevX=p.x, prevY=p.y;
+      p.vy += gravity*dt;
+      p.x += p.vx*dt;
+      p.y += p.vy*dt;
+
+      // 화면 밖 이탈 방지
+      p.x = clamp(p.x, 0, W - p.w);
+      if(p.y > H + 200){
+        p.x = 90; p.y = 200; p.vx=0; p.vy=0;
+      }
+
+      resolvePlatforms(prevX, prevY);
+
+      // 코인 수집
+      let changed=false;
+      for(const c of state.coins){
+        if(c.taken) continue;
+        if(aabb(p.x,p.y,p.w,p.h, c.x-16,c.y-16, 32,32)){
+          c.taken=true;
+          state.score += 10;
+          changed=true;
+        }
+      }
+
+      const got = state.coins.filter(c=>c.taken).length;
+      state.portalOn = got >= state.need;
+
+      if(state.portalOn && inPortal()){
+        nextStageOrEnding();
+      }
+
+      if(changed) updateHUD();
+      updateHUD();
+    }
+
+    beginView();
+
+    if(state.mode === "ending"){
+      if(IMG.ending){
+        // 따뜻하게/찐하게
+        ctx.filter = "saturate(1.35) contrast(1.12) brightness(1.06)";
+        ctx.drawImage(IMG.ending, 0,0,W,H);
+        ctx.filter = "none";
+      }else{
+        ctx.fillStyle="#fff";
+        ctx.font="800 22px system-ui";
+        ctx.fillText("ending.png 로딩 실패", 40,60);
+      }
+      endView();
+      requestAnimationFrame(loop);
+      return;
+    }
+
+    if(IMG.bg){
+      ctx.filter = "saturate(1.22) contrast(1.08) brightness(1.03)";
+      ctx.drawImage(IMG.bg, 0,0,W,H);
+      ctx.filter = "none";
+    }else{
+      ctx.fillStyle="#cfefff";
+      ctx.fillRect(0,0,W,H);
+    }
+
+    // 코인/포탈
+    for(const c of state.coins) if(!c.taken) drawCoin(c);
+    drawPortal();
+
+    // 발판 보기(원하면)
+    if(state.showPlat) drawPlatformsDebug();
+
+    drawPlayer();
+
+    endView();
+    requestAnimationFrame(loop);
+  }
+
+  // 초기 로드
+  buildStage(0);
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
